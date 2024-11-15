@@ -3,17 +3,30 @@ name = "random-earnings-bot"
 version = "0.1.0"
 description = "A Telegram bot for cryptocurrency trading and AI-driven market analysis"
 authors = ["Beaver <maxymviunov@pm.me>"]
+packages = [{include = 'random_earnings_bot'}]
 license = "GPL-2.0"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = ">=3.10,<3.11"
 python-telegram-bot = "^21.6"
 python-dotenv = "^1.0.1"
+python-binance = "^1.0.19"
+pandas = "^2.2.3"
+tensorflow-io-gcs-filesystem = "0.23.1"
+matplotlib = "^3.9.2"
+tensorflow-addons = "0.20.0"
+numpy = "<2"
+ranger21 = {git = "https://github.com/lessw2020/Ranger21.git"}
+torch = "^2.5.0"
+tensorflow = "2.12.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^7.0"
 
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
 
 [build-system]
 requires = ["poetry-core"]

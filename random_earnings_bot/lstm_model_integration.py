@@ -7,9 +7,8 @@ from dotenv import load_dotenv
 import time
 import csv
 from tensorflow.keras.callbacks import EarlyStopping, TensorBoard, ModelCheckpoint, Callback, ReduceLROnPlateau, CSVLogger, TerminateOnNaN, BackupAndRestore
-from tensorflow.keras.optimizers import Adam
-from keras_radam import RAdam
-from keras_lookahead import Lookahead
+from ranger21 import Ranger21
+from tensorflow.keras.optimizers import AdamW
 
 load_dotenv()
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
@@ -56,7 +55,7 @@ def fetch_historical_data(symbol, interval, lookback):
     return data
 
 # Fetch historical data for Bitcoin
-historical_data = fetch_historical_data("DOGEUSDT", Client.KLINE_INTERVAL_1HOUR, "30 days ago UTC")
+historical_data = fetch_historical_data("DOGEUSDT", Client.KLINE_INTERVAL_1HOUR, "90 days ago UTC")
 
 # Prepare the data for training the model
 def prepare_data(data, window_size=24):
@@ -70,10 +69,11 @@ def prepare_data(data, window_size=24):
 
 X, y = prepare_data(historical_data)
 
-# Split the data into training and test sets
-split = int(0.8 * len(X))
-X_train, X_test = X[:split], X[split:]
-y_train, y_test = y[:split], y[split:]
+# Split the data into training, validation, and test sets
+train_size = int(0.7 * len(X))
+val_size = int(0.15 * len(X))
+X_train, X_val, X_test = X[:train_size], X[train_size:train_size + val_size], X[train_size + val_size:]
+y_train, y_val, y_test = y[:train_size], y[train_size:train_size + val_size], y[train_size + val_size:]
 
 # Define the LSTM model
 model = tf.keras.Sequential([
@@ -90,14 +90,13 @@ model = tf.keras.Sequential([
 
 # Note: Mean Squared Error (MSE) is used as the loss function here. MSE gives greater weight to larger errors, which means the modell will focus more on minimizing large deviations.
 # This is particularly useful in regression problems where larger errors are more costly.
+# NRanger21 does not require a learning rate parameter in its default form, as it is internally managed for improved training stability.
 
+adamw_opt = AdamW(learning_rate=0.001, weight_decay=1e-4)
+model.compile(optimizer=adamw_opt, loss='mean_squared_error', metrics=['mae', 'mape'])
+# ranger_opt = Ranger21(params=model.trainable_variables,lr=0.001)
+# model.compile(optimizer=ranger_opt, loss='mean_squared_error', metric=['mae', 'mape'])
 
-# Note: The optimizer uses a learning rate of 0.001 and gradient clipping (clipvalue=1.0).
-# Gradient clipping is used to prevent gradients from exploding during training.
-# Monitor gradients during training - if they become too large, it indicates potential instability (exploding gradients), whereas too small values indicate vanishing gradients, leading to ineffective learning.
-
-optimizer = Adam(learning_rate=0.001, clipvalue=1.0)
-model.compile(optimizer=optimizer, loss='mean_squared_error', metrics=['mae', 'mape']) # Did we need more metrics?
 
 # Reshape the data for LSTM (add an additional dimension)
 X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
@@ -109,15 +108,18 @@ X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
 # Note: EarlyStopping is used to stop training when there is no improvement in validation loss to avoid overfitting.
 
 # Note: If `val_loss` stops improving but `train_loss` keeps decreasing, it indicates overfiting. Adjusting the model complexity or adding regularization techniques may be necessary.
-early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+# The 'patience' parameter defines how many without improvement in validation loss to wait before stopping the training. Increasing 'patience' allows the model to potentially overcome local minima.
+early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
 
 # Note: TensorBoard is used to visualize the training process including metrics like loss, mae, and mape.
 # Note: Monitor loss values over epochs - consistent decreases indicate good training. Sudden jumps may suggest learning rate issues.
-tensorboard_callback = TensorBoard(log_dir='./logs', histogram_freq=1)
+tensorboard_callback = TensorBoard(log_dir='./logs/adamw', histogram_freq=1)
 
 # Note: ReduceLROnPlateau decreases the learning rate when the validation process stop improving.
 # Note: This helps in making finer adjustments to the model weights as training progresses, especially when convergence slows down.
-reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=1e-6)
+# The `factor` parameter the rate by which the learning rate is reduced when no improvement in validation loss is detected.
+# A value of 0.2 means the learning rate will be reduced to 20% if its current value, allowing finer adjustments.
+reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6)
 
 # Note: ModelCheckpoint saves the model after every epoch if there is an improvement in validation loss.
 # Note: Saving the model ensures that the best version is retained. If `val_loss` improves significantly, it indicates good generalization; otherwise, consider early stopping or changing model arhitecture.
@@ -125,7 +127,7 @@ checkpoint_callback = ModelCheckpoint('model_checkpoint.keras', save_best_only=T
 
 # Note: CSVLogger writes add training metrics to a CSV file after each epoch.
 # Note: Keeping track of metrics over time is useful for post-training analysis and comparison between different models or training sessions.
-csv_logger = CSVLogger('training_log.csv', append=True)
+csv_logger = CSVLogger('training_adamw.csv', append=True)
 
 # Note: TerminateOnNaN stops the training process if the loss or any monitored metric becomes NaN.
 # Note: This helps prevent wasting computational resources when the model encounters numerical instability.
@@ -160,10 +162,12 @@ class BatchLogger(Callback):
 batch_logger = BatchLogger()
 
 # Train the model with callbacks
+# The batch size is redused to 16 to improve gradient stability during training.
+# Smaller batch sizes can provide more detailes updates to model weights, which is particularly useful for preventing gradient explosion or vanishing.
 model.fit(
     X_train, y_train,
-    validation_data=(X_test, y_test),
-    batch_size=32,
+    validation_data=(X_val, y_val),
+    batch_size=16,
     epochs=50,
     callbacks=[
         early_stopping, tensorboard_callback, reduce_lr, checkpoint_callback,
@@ -172,5 +176,5 @@ model.fit(
 )
 
 # Save the trained model
-model.save('random_earnings_model.keras')
+model.save('adamw_model.keras')
 
